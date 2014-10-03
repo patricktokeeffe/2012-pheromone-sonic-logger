@@ -1,0 +1,390 @@
+''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+'  Data logger program to record ATI sonic anemometers                         '
+'                                                                              '
+'  Prepared for Steve Edburg                                                   '
+'  Laboratory for Atmospheric Research                                         '
+'  Washington State University                                                 '
+'                                                                              '
+'  ATI_recorder.cr1                                                            '
+'  Version (date last modified): 2012.06.18 0830                               '
+'  An adaption of wsuWindTower_v2.cr3 from 2010 Big Southern Butte study       '
+'  pokeeffe - patrick.okeeffe@email.wsu.edu                                    '
+'                                                                              '
+'  This program is covered by the MIT License, a copy of which is provided     '
+'  at the end of this file.                                                    '
+''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+' !!!!!  ADJUST THIS IF NECESSARY  !!!!!
+' These constants control how much data is stored on the compact flash
+' card and whether it overwrite previous data when the tables fill up.
+Const DAYS_OF_DATA_STORAGE = 14     'integer # of days or -1 to autoallocate
+Const STOP_WHEN_FULL = 1            '0=no, 1=yes
+
+
+' ----- OPTIONAL ADJUSTMENTS -----
+' These values are incorporated in on-line instantaneous calculations of wind
+' speed & direction for each sonic. Since those values _are_not_logged_ these
+' are wholly optional adjustments.
+Const AZIMUTH_1 = 0
+Const AZIMUTH_2 = 0
+Const AZIMUTH_3 = 0
+Const AZIMUTH_4 = 0
+Const DECLINATION = 0
+
+
+'''''' ATI sonic configuration '''''''''''''''''''''''''''''''''''''''''''''''''
+' ASCII mode: terse        Data quality algorithm: ON
+' Baud rate: 9600          Shadow correction: ON
+' Parity: even             Remove RH from temp calc: OFF
+' data bits: 7             Sampling 10Hz (20 samples, 5ms apart per output)
+' stop bits: 1             Output: U,V,W,T
+'                          Data lag: 1/10th second
+
+'''''' PS100 charger wiring ''''''''''''''''''''''''''''''''''''''''''''''''''''
+'POWER IN (15-  vDC)
+'one      18vDC dell laptop power supply (+)
+'other    18vDC dell laptop power supply (-)
+'
+'POWER OUT
+'12V      CR3000 12v
+'         network switch (+)
+'G        CR3000 ground
+'         network switch (-)
+'
+'BATTERY CONN
+'(+)      deep cycle batt (+)
+'(-)      deep cycle batt (-)
+
+'''''' CR3000 Wiring '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+'POWER IN (10-16vDC)
+'12V			PS100 charger (+)
+'G				PS100 charger (-)
+'
+'POWER OUT 
+'12V      ATI sonics power (+)
+'G        ATI sonics power (-)
+'
+'SWITCHED POWER OUT
+'12V      enclosure fan (+)
+'G        enclosure fan (-)
+'
+'COM PORTS
+'C1   green    COM1 Tx
+'C2   red      COM1 Rx
+'C3   brown    COM2 Tx
+'C4   white    COM2 Rx
+'G    black    common ground/shield
+'C5   blue     COM3 Tx
+'C6   orange   COM3 Rx
+'C7   yellow   COM4 Tx
+'C8   violet   COM4 Rx
+
+
+Const SCAN_RATE = 100      'length of primary scan interval, milliseconds
+#If (DAYS_OF_DATA_STORAGE < 0)
+  Const TABLE_SIZE = -1  'autoallocate
+#Else
+  Const TABLE_SIZE = DAYS_OF_DATA_STORAGE * 86400 * (1000/SCAN_RATE)
+  ' 14 days * (86400 sec/day) * (1000msec/sec) * (1rec / 100msec)
+#EndIf
+
+'''''' Variables '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+Dim j 
+Const DperR = 180/3.14159
+Const Yes = True
+Const No = False
+
+' DATALOGGER
+Public panel_temp_C
+Public batt_V
+Units panel_temp_C = C
+Units batt_V = volts
+
+' COM 1 sonic input
+Public sonic_1(7) As Float
+Alias sonic_1(1) = Ux_1
+Alias sonic_1(2) = Uy_1
+Alias sonic_1(3) = Uz_1
+Alias sonic_1(4) = Ts_1
+Alias sonic_1(5) = diag_1
+Alias sonic_1(6) = instWS_1
+Alias sonic_1(7) = instWD_1
+Units sonic_1 = m/s
+Units Ts_1 = C
+Units instWD_1 = degrees
+Dim son1_in_str As String * 20
+Dim son1_in_parts(4) As String * 5
+Dim bytes_back_1
+
+' COM 2 sonic input
+Public sonic_2(7) As Float
+Alias sonic_2(1) = Ux_2
+Alias sonic_2(2) = Uy_2
+Alias sonic_2(3) = Uz_2
+Alias sonic_2(4) = Ts_2
+Alias sonic_2(5) = diag_2
+Alias sonic_2(6) = instWS_2
+Alias sonic_2(7) = instWD_2
+Units sonic_2 = m/s
+Units Ts_2 = C
+Units instWD_2 = degrees
+Dim son2_in_str As String * 20
+Dim son2_in_parts(4) As String * 5
+Dim bytes_back_2
+
+' COM 3 sonic input
+Public sonic_3(7) As Float
+Alias sonic_3(1) = Ux_3
+Alias sonic_3(2) = Uy_3
+Alias sonic_3(3) = Uz_3
+Alias sonic_3(4) = Ts_3
+Alias sonic_3(5) = diag_3
+Alias sonic_3(6) = instWS_3
+Alias sonic_3(7) = instWD_3
+Units sonic_3 = m/s
+Units Ts_3 = C
+Units instWD_3 = degrees
+Dim son3_in_str As String * 20
+Dim son3_in_parts(4) As String * 5
+Dim bytes_back_3
+
+' COM 4 sonic input
+Public sonic_4(7) As Float
+Alias sonic_4(1) = Ux_4
+Alias sonic_4(2) = Uy_4
+Alias sonic_4(3) = Uz_4
+Alias sonic_4(4) = Ts_4
+Alias sonic_4(5) = diag_4
+Alias sonic_4(6) = instWS_4
+Alias sonic_4(7) = instWD_4
+Units sonic_4 = m/s
+Units Ts_4 = C
+Units instWD_4 = degrees
+Dim son4_in_str As String * 20
+Dim son4_in_parts(4) As String * 5
+Dim bytes_back_4
+
+
+'''''' Data Tables ''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+DataTable(sonic_com1,TRUE,-1)
+	DataInterval(0,0,mSec,100) 
+	CardOut(STOP_WHEN_FULL,TABLE_SIZE)
+  Sample(4,Ux_1,IEEE4)  '+Uy,Uz,Ts
+  Sample(1,diag_1,UINT2)
+EndTable
+
+DataTable(sonic_com2,TRUE,-1)
+	DataInterval(0,0,mSec,100)
+	CardOut(STOP_WHEN_FULL,TABLE_SIZE) 
+  Sample(4,Ux_2,IEEE4)  '+Uy,Uz,Ts
+  Sample(1,diag_2,UINT2)
+EndTable
+
+DataTable(sonic_com3,TRUE,-1)
+	DataInterval(0,0,mSec,100)
+	CardOut(STOP_WHEN_FULL,TABLE_SIZE)
+  Sample(4,Ux_3,IEEE4)  '+Uy,Uz,Ts
+  Sample(1,diag_3,UINT2)
+EndTable
+
+DataTable(sonic_com4,TRUE,-1)
+	DataInterval(0,0,mSec,100)
+	CardOut(STOP_WHEN_FULL,TABLE_SIZE)
+  Sample(4,Ux_4,IEEE4)  '+Uy,Uz,Ts
+  Sample(1,diag_4,UINT2)
+EndTable
+
+
+'''''' Datalogger Menu ''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+DisplayMenu("ATI Recorder",-2)    'show menu upon startup; display system as submenu
+  DisplayValue("Battery",Public.batt_V)
+  SubMenu("10hz data")
+    SubMenu("COM1")
+      DisplayValue("Ux",Public.Ux_1)
+      DisplayValue("Uy",Public.Uy_1)
+      DisplayValue("Uz",Public.Uz_1)
+      DisplayValue("Ts",Public.Ts_1)
+      DisplayValue("WS",Public.instWS_1)
+      DisplayValue("WD",Public.instWD_1)
+      DisplayValue("diag",Public.diag_1)
+    EndSubMenu
+    SubMenu("COM2")
+      DisplayValue("Ux",Public.Ux_2)
+      DisplayValue("Uy",Public.Uy_2)
+      DisplayValue("Uz",Public.Uz_2)
+      DisplayValue("Ts",Public.Ts_2)
+      DisplayValue("WS",Public.instWS_2)
+      DisplayValue("WD",Public.instWD_2)
+      DisplayValue("diag",Public.diag_2)
+    EndSubMenu
+    SubMenu("COM3")
+      DisplayValue("Ux",Public.Ux_3)
+      DisplayValue("Uy",Public.Uy_3)
+      DisplayValue("Uz",Public.Uz_3)
+      DisplayValue("Ts",Public.Ts_3)   
+      DisplayValue("WS",Public.instWS_3)
+      DisplayValue("WD",Public.instWD_3)
+      DisplayValue("diag",Public.diag_3)
+    EndSubMenu
+    SubMenu("COM4")
+      DisplayValue("Ux",Public.Ux_4)
+      DisplayValue("Uy",Public.Uy_4)
+      DisplayValue("Uz",Public.Uz_4)
+      DisplayValue("Ts",Public.Ts_4)
+      DisplayValue("WS",Public.instWS_4)
+      DisplayValue("WD",Public.instWD_4)
+      DisplayValue("diag",Public.diag_4)
+    EndSubMenu
+  EndSubMenu
+EndMenu
+
+
+'''''' PROGRAM '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+BeginProg
+  'open serial ports     Baud=9600; 10=even/7bits/1stop; 0ms Tx delay; 40byte buffer
+  SerialOpen(Com1,9600,10,0,40)
+  SerialOpen(Com2,9600,10,0,40)
+  SerialOpen(Com3,9600,10,0,40)
+  SerialOpen(Com4,9600,10,0,40)
+  
+	Scan (SCAN_RATE,mSec,10,0)
+    
+    PanelTemp(panel_temp_C,250)      'measure datalogger temperature
+    If ( panel_temp_C >= 30 )        'if data logger temp exceeds 30 deg C / 85 deg F
+      SW12(True)                       'turn on fan
+    ElseIf ( panel_temp_C < 27 )
+      SW12(False)
+    EndIf
+    Battery(batt_V)                  'measure input voltage
+
+		'Get serial data from ATI-Sx sonic
+    'SerialInRecord (COMPort,Dest,SyncChar,NumBytes,EndWord,NumberBytesReturned,Option)
+		'		   ComPort:  Datalogger communications port
+		'			 Dest:  Destination variable
+		'		   SyncChar:  Synchronization character at the beginning of the record
+		'		   NumBytes:  Fixed number of bytes in the record, if the number of bytes varies, use the SyncChar and EndWord to define the record
+		'		   EndWord:  Record termination word
+		'      NumberbytesReturned:  Variable to hold the number of bytes in the record
+		'		   Options:  00 most recent record, do not store NAN if no record
+		'				         01 most recent record, store NAN if no record
+    '				         10 oldest record, do not store NAN if no record
+		'				         11 oldest record, store NAN if no record
+		' SONIC COM PORT 1
+ 		SerialInRecord (Com1,son1_in_str,0,20,&H0D0A,bytes_back_1,00)  'get serial data
+		MoveBytes (son1_in_parts(1),0,son1_in_str,0,5)    'parse individual values from data string
+		MoveBytes (son1_in_parts(2),0,son1_in_str,5,5)
+		MoveBytes (son1_in_parts(3),0,son1_in_str,10,5)
+		MoveBytes (son1_in_parts(4),0,son1_in_str,15,5)
+		diag_1 = 0                      'reset diagnostic word
+		For j = 1 To 4                  'for each data byte
+			sonic_1(j) = son1_in_parts(j)	  'Convert from a string to float
+			If (sonic_1(j) = -9999)           'if reported -99.99 -> axis blockage / transducer failure
+			  sonic_1(j) = NAN
+			  diag_1 = diag_1 + 1*10^(j-1)      'place a 1 in ones/tens/hundreds/thousands place
+			ElseIf (sonic_1(j) = 9999)        'if reported +99.99 -> data quality algorithm on; ATI threw out data
+			  sonic_1(j) = NAN
+			  diag_1 = diag_1 + 2*10^(j-1)              'place a 2 in ones/... place
+			Else                              'otherwise
+			  sonic_1(j) = sonic_1(j)/100	      'Scale the ATI data.
+			EndIf
+		Next j	
+		'calc horizontal WD, correct for sonic orientation, mag declination & adjust 0-360
+ 		instWD_1 = (ATN2(-1*Ux_1,-1*Uy_1)*DperR + AZIMUTH_1 + DECLINATION + 360) MOD 360
+	  instWS_1 = SQR(Ux_1^2+Uy_1^2)                                     'calc WS
+  	CallTable(sonic_com1)
+		
+		' SONIC COM PORT 2
+ 		SerialInRecord (Com2,son2_in_str,0,20,&H0D0A,bytes_back_2,00)  'get serial data
+		MoveBytes (son2_in_parts(1),0,son2_in_str,0,5)    'parse individual values from data string
+		MoveBytes (son2_in_parts(2),0,son2_in_str,5,5)
+		MoveBytes (son2_in_parts(3),0,son2_in_str,10,5)
+		MoveBytes (son2_in_parts(4),0,son2_in_str,15,5)
+	  diag_2 = 0
+		For j = 1 To 4                  'for each data byte
+			sonic_2(j) = son2_in_parts(j)	  'Convert from a string to float
+			If (sonic_2(j) = -9999)
+			  sonic_2(j) = NAN
+			  diag_2 = diag_2 + 1*10^(j-1)
+			ElseIf (sonic_2(j) = 9999)
+			  sonic_2(j) = NAN
+			  diag_2 = diag_2 + 2*10^(j-1)
+			Else
+			  sonic_2(j) = sonic_2(j)/100	    'Scale the ATI data.
+			EndIf
+		Next j	
+		'calc horizontal WD, correct for sonic orientation, mag declination & adjust 0-360
+		instWD_2 = (ATN2(-1*Ux_2,-1*Uy_2)*DperR + AZIMUTH_2 + DECLINATION + 360) MOD 360
+	  instWS_2 = SQR(Ux_2^2+Uy_2^2)                                     'calc WS
+    CallTable(sonic_com2)
+
+    ' SONIC COM PORT 3
+ 		SerialInRecord (Com3,son3_in_str,0,20,&H0D0A,bytes_back_3,01)  'get serial data
+		MoveBytes (son3_in_parts(1),0,son3_in_str,0,5)    'parse individual values from data string
+		MoveBytes (son3_in_parts(2),0,son3_in_str,5,5)
+		MoveBytes (son3_in_parts(3),0,son3_in_str,10,5)
+		MoveBytes (son3_in_parts(4),0,son3_in_str,15,5)
+		diag_3 = 0
+		For j = 1 To 4                  'for each data byte
+			sonic_3(j) = son3_in_parts(j)	  'Convert from a string to float
+			If (sonic_3(j) = -9999)
+			  sonic_3(j) = NAN
+			  diag_3 = diag_3 + 1*10^(j-1)
+			ElseIf (sonic_3(j) = 9999)
+			  sonic_3(j) = NAN
+			  diag_3 = diag_3 + 2*10^(j-1)
+			Else
+			  sonic_3(j) = sonic_3(j)/100	    'Scale the ATI data.
+			EndIf
+		Next j
+		'calc horizontal WD, correct for sonic orientation, mag declination & adjust 0-360
+		instWD_3 = (ATN2(-1*Ux_3,-1*Uy_3)*DperR + AZIMUTH_3 + DECLINATION + 360) MOD 360
+	  instWS_3 = SQR(Ux_3^2+Uy_3^2)                                     'calc WS
+    CallTable(sonic_com3)
+	  
+	  ' SONIC COM PORT 4
+ 		SerialInRecord (Com4,son4_in_str,0,20,&H0D0A,bytes_back_4,01)  'get serial data
+		MoveBytes (son4_in_parts(1),0,son4_in_str,0,5)    'parse individual values from data string
+		MoveBytes (son4_in_parts(2),0,son4_in_str,5,5)
+		MoveBytes (son4_in_parts(3),0,son4_in_str,10,5)
+		MoveBytes (son4_in_parts(4),0,son4_in_str,15,5)
+		diag_4 = 0
+		For j = 1 To 4                  'for each data byte
+			sonic_4(j) = son4_in_parts(j)	  'Convert from a string to float
+			If (sonic_4(j) = -9999)
+			  sonic_4(j) = NAN
+			  diag_4 = diag_4 + 1*10^(j-1)
+			ElseIf (sonic_4(j) = 9999)
+			  sonic_4(j) = NAN
+			  diag_4 = diag_4 +  2*10^(j-1)
+			Else
+			  sonic_4(j) = sonic_4(j)/100	    'Scale the ATI data.
+			EndIf
+		Next j
+		'calc horizontal WD, correct for sonic orientation, mag declination & adjust 0-360
+		instWD_4 = (ATN2(-1*Ux_4,-1*Uy_4)*DperR + AZIMUTH_4 + DECLINATION + 360) MOD 360
+	  instWS_4 = SQR(Ux_4^2+Uy_4^2)                                     'calc WS
+  	CallTable(sonic_com4)
+  	 
+	NextScan
+EndProg
+
+
+'This work is covered by the MIT License, an Open Source Initiative Approved License
+'
+'Copyright (c) 2012 Laboratory For Atmospheric Research, Washington State University
+'
+'Permission Is hereby granted, free of charge, To any person obtaining a copy of this 
+'software AND associated documentation files (the "Software"), To deal in the Software 
+'without restriction, including without limitation the rights To use, copy, modify, merge, 
+'publish, distribute, sublicense, AND/OR sell copies of the Software, AND To permit 
+'persons To whom the Software Is furnished To Do so, subject To the following conditions:
+'
+'The above copyright notice AND this permission notice shall be included in all copies OR 
+'substantial portions of the Software.
+'
+'THE SOFTWARE Is PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, 
+'INCLUDING BUT NOT LIMITED To THE WARRANTIES OF MERCHANTABILITY, FITNESS For A PARTICULAR 
+'PURPOSE AND NONINFRINGEMENT. IN No EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE 
+'For ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR 
+'OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER 
+'DEALINGS IN THE SOFTWARE.
